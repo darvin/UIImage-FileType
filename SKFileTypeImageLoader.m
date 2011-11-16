@@ -58,7 +58,10 @@ static SKFileTypeImageLoader *sharedLoader = nil;
 }
 
 -(UIImage *) imageForMimeType:(NSString *) mimeType size:(unsigned int) size {
- 
+    if (!mimeType) {
+        return [self imageForMimeType:@"unknown" size:size];
+    }
+    
     NSString *basename = [mimeType stringByReplacingOccurrencesOfString:@"/" withString:@"-"];
     
     NSString* imageName = [self constructFilenameWithBasename:basename size:size];
@@ -70,6 +73,7 @@ static SKFileTypeImageLoader *sharedLoader = nil;
             image = [self loadImageWithName:imageName];
         } else {
             NSLog(@"WARNING! Image %@ not found", imageName);
+            return [self imageForMimeType:@"unknown" size:size];
         }
     }
     return image;
