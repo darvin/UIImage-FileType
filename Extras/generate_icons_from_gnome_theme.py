@@ -42,15 +42,43 @@ def _safe_mkdir(dirname):
             raise DestinationInvalid
 
 
-def _copy_icons(path, size, destination):
+def _copy_icons(path, size, destination, only_basenames=None):
     for filename in os.listdir(path):
         file = os.path.join(path, filename)
         if os.path.isfile(file):
             basename, ext = os.path.splitext(filename)
-            new_filename = RESULT_FILENAME_FORMAT.format(size=size, basename=_strip_prefix(basename), extension=ext)
-            new_file_path = os.path.join(destination, new_filename)
-            shutil.copyfile(file, new_file_path)
-            print "{oldfile} -> {newfile}".format(oldfile=file, newfile=new_file_path)
+            basename=_strip_prefix(basename)
+            if not only_basenames or basename in only_basenames:
+                if only_basenames:
+                    new_basename = only_basenames[basename]
+                else:
+                    new_basename = basename
+                new_filename = RESULT_FILENAME_FORMAT.format(size=size, basename=new_basename, extension=ext)
+                new_file_path = os.path.join(destination, new_filename)
+                shutil.copyfile(file, new_file_path)
+                print "{oldfile} -> {newfile}".format(oldfile=file, newfile=new_file_path)
+
+
+def _get_paths_from_config_for_context(config, directories, source_path, context):
+
+    paths = []
+    actual_sizes = set()
+    paths_by_sizes = {}
+
+
+    for directory in directories:
+        size = config.getint(directory, "Size")
+        current_context = config.get(directory, "Context")
+        itype = config.get(directory, "Type")
+
+        if current_context.lower()==context and itype.lower()=="fixed" and size in SIZES:
+            path = os.path.join(source_path, directory)
+            paths.append(path)
+            if size in paths_by_sizes:
+                raise SourceThemeInvalid
+            paths_by_sizes[size] = path
+            actual_sizes.add(size)
+    return paths, paths_by_sizes, actual_sizes
 
 
 def generate_icons_from_gnome_theme(source, destination):
@@ -60,21 +88,10 @@ def generate_icons_from_gnome_theme(source, destination):
     config = ConfigParser.RawConfigParser()
     config.read(index_theme_path)
     directories = config.get("Icon Theme", "Directories").split(",")
-    paths = []
-    actual_sizes = set()
-    paths_by_sizes = {}
-    for directory in directories:
-        size = config.getint(directory, "Size")
-        context = config.get(directory, "Context")
-        itype = config.get(directory, "Type")
 
-        if context.lower()=="mimetypes" and itype.lower()=="fixed" and size in SIZES:
-            path = os.path.join(source, directory)
-            paths.append(path)
-            if size in paths_by_sizes:
-                raise SourceThemeInvalid
-            paths_by_sizes[size] = path
-            actual_sizes.add(size)
+    paths, paths_by_sizes, actual_sizes = _get_paths_from_config_for_context(config, directories, source, context="mimetypes")
+
+    places_paths, places_paths_by_sizes, places_actual_sizes = _get_paths_from_config_for_context(config, directories, source, context="places")
 
     plist = {"Info":{
         "ThemeName": config.get("Icon Theme", "Name"),
@@ -90,6 +107,14 @@ def generate_icons_from_gnome_theme(source, destination):
     for size, path in paths_by_sizes.items():
         _find_symlinks_in_path(path, plist)
         _copy_icons(path=path, size=size, destination=destination_icons)
+
+    for size, path in places_paths_by_sizes.items():
+        if size in actual_sizes:
+            _copy_icons(path=path, size=size, destination=destination_icons, only_basenames={
+                "folder":"text-directory",
+                "folder-documents":"text-directory-documents",
+            })
+
 
     plist_filename = os.path.join(destination, "FileTypeIcons.plist")
     plistlib.writePlist(plist, plist_filename)
