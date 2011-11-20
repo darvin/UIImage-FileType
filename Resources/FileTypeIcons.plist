@@ -8,9 +8,8 @@
 		<string>{size}_{basename}{extension}</string>
 		<key>Sizes</key>
 		<array>
-			<integer>16</integer>
-			<integer>32</integer>
-			<integer>48</integer>
+			<integer>40</integer>
+			<integer>80</integer>
 		</array>
 		<key>ThemeComment</key>
 		<string>Icon theme project with tilish style, by Tiheum</string>

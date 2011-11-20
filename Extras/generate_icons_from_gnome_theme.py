@@ -4,9 +4,13 @@ import os
 import ConfigParser
 import shutil
 import plistlib
+import subprocess
 
-SIZES = (16, 32, 48)
+SIZES = (40, 80)
 RESULT_FILENAME_FORMAT = "{size}_{basename}{extension}"
+BATIK_JAR_PATH = "/Users/darvin/Downloads/batik-1.7/batik-rasterizer.jar"
+
+
 class SourceThemeInvalid(Exception):
     pass
 
@@ -45,10 +49,20 @@ def _safe_mkdir(dirname):
 def _copy_icons(path, size, destination, only_basenames=None):
     for filename in os.listdir(path):
         file = os.path.join(path, filename)
+        fullfilename = os.path.abspath(file)
         if os.path.isfile(file):
             basename, ext = os.path.splitext(filename)
             basename=_strip_prefix(basename)
+            if ext not in (".svg", ".png"):
+                continue
             if not only_basenames or basename in only_basenames:
+                if ext==".svg":
+                    subprocess.call(["/usr/bin/java","-jar",
+                                     BATIK_JAR_PATH, fullfilename,
+                                     "-m","image/png","-w",str(size), "-h", str(size)])
+                    ext = ".png"
+                    file = file.replace(".svg", ".png") #fixme
+
                 if only_basenames:
                     new_basename = only_basenames[basename]
                 else:
@@ -65,19 +79,28 @@ def _get_paths_from_config_for_context(config, directories, source_path, context
     actual_sizes = set()
     paths_by_sizes = {}
 
-
+    scalable_dir = None
     for directory in directories:
         size = config.getint(directory, "Size")
         current_context = config.get(directory, "Context")
         itype = config.get(directory, "Type")
 
-        if current_context.lower()==context and itype.lower()=="fixed" and size in SIZES:
+        if current_context.lower()==context and (itype.lower()=="fixed" and size in SIZES):
             path = os.path.join(source_path, directory)
             paths.append(path)
             if size in paths_by_sizes:
                 raise SourceThemeInvalid
             paths_by_sizes[size] = path
             actual_sizes.add(size)
+        if current_context.lower()==context and itype.lower()=="scalable":
+            scalable_dir = os.path.join(source_path, directory)
+
+    if scalable_dir:
+        for size in SIZES:
+            if size not in actual_sizes:
+                paths_by_sizes[size] = scalable_dir
+                actual_sizes.add(size)
+        paths.append(scalable_dir)
     return paths, paths_by_sizes, actual_sizes
 
 
