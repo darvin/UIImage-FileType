@@ -1,14 +1,15 @@
 #!/usr/bin/env python
 from optparse import OptionParser
 import os
+import io
 import ConfigParser
 import shutil
 import plistlib
 import subprocess
+import json
 
-SIZES = (40, 80)
 RESULT_FILENAME_FORMAT = "{size}_{basename}{extension}"
-BATIK_JAR_PATH = "/Users/darvin/Downloads/batik-1.7/batik-rasterizer.jar"
+BATIK_JAR_PATH = os.environ.get("BATIK_RASTERIZER_PATH") or "./build/batik-1.7/batik-rasterizer.jar"
 
 
 class SourceThemeInvalid(Exception):
@@ -46,7 +47,7 @@ def _safe_mkdir(dirname):
             raise DestinationInvalid
 
 
-def _copy_icons(path, size, destination, only_basenames=None):
+def _copy_icons(path, size, destination, only_basenames=None, convert_from_svg=True):
     for filename in os.listdir(path):
         file = os.path.join(path, filename)
         fullfilename = os.path.abspath(file)
@@ -57,7 +58,8 @@ def _copy_icons(path, size, destination, only_basenames=None):
                 continue
             if not only_basenames or basename in only_basenames:
                 if ext==".svg":
-                    subprocess.call(["/usr/bin/java","-jar",
+                    if convert_from_svg:
+                        subprocess.call(["/usr/bin/java","-jar",
                                      BATIK_JAR_PATH, fullfilename,
                                      "-m","image/png","-w",str(size), "-h", str(size)])
                     ext = ".png"
@@ -73,7 +75,7 @@ def _copy_icons(path, size, destination, only_basenames=None):
                 print "{oldfile} -> {newfile}".format(oldfile=file, newfile=new_file_path)
 
 
-def _get_paths_from_config_for_context(config, directories, source_path, context):
+def _get_paths_from_config_for_context(config, directories, source_path, context, sizes=(40,80)):
 
     paths = []
     actual_sizes = set()
@@ -85,7 +87,7 @@ def _get_paths_from_config_for_context(config, directories, source_path, context
         current_context = config.get(directory, "Context")
         itype = config.get(directory, "Type")
 
-        if current_context.lower()==context and (itype.lower()=="fixed" and size in SIZES):
+        if current_context.lower()==context and (itype.lower()=="fixed" and size in sizes):
             path = os.path.join(source_path, directory)
             paths.append(path)
             if size in paths_by_sizes:
@@ -96,7 +98,7 @@ def _get_paths_from_config_for_context(config, directories, source_path, context
             scalable_dir = os.path.join(source_path, directory)
 
     if scalable_dir:
-        for size in SIZES:
+        for size in sizes:
             if size not in actual_sizes:
                 paths_by_sizes[size] = scalable_dir
                 actual_sizes.add(size)
@@ -104,7 +106,7 @@ def _get_paths_from_config_for_context(config, directories, source_path, context
     return paths, paths_by_sizes, actual_sizes
 
 
-def generate_icons_from_gnome_theme(source, destination):
+def generate_icons_from_gnome_theme(source, destination, list_format="plist", sizes=(40,80), convert_from_svg=True):
     index_theme_path = os.path.join(source, "index.theme")
     if not os.path.exists(index_theme_path):
         raise SourceThemeInvalid
@@ -112,9 +114,9 @@ def generate_icons_from_gnome_theme(source, destination):
     config.read(index_theme_path)
     directories = config.get("Icon Theme", "Directories").split(",")
 
-    paths, paths_by_sizes, actual_sizes = _get_paths_from_config_for_context(config, directories, source, context="mimetypes")
+    paths, paths_by_sizes, actual_sizes = _get_paths_from_config_for_context(config, directories, source, context="mimetypes", sizes=sizes)
 
-    places_paths, places_paths_by_sizes, places_actual_sizes = _get_paths_from_config_for_context(config, directories, source, context="places")
+    places_paths, places_paths_by_sizes, places_actual_sizes = _get_paths_from_config_for_context(config, directories, source, context="places", sizes=sizes)
 
     plist = {"Info":{
         "ThemeName": config.get("Icon Theme", "Name"),
@@ -129,29 +131,48 @@ def generate_icons_from_gnome_theme(source, destination):
 
     for size, path in paths_by_sizes.items():
         _find_symlinks_in_path(path, plist)
-        _copy_icons(path=path, size=size, destination=destination_icons)
+        _copy_icons(path=path, size=size, destination=destination_icons, convert_from_svg=convert_from_svg)
 
     for size, path in places_paths_by_sizes.items():
         if size in actual_sizes:
             _copy_icons(path=path, size=size, destination=destination_icons, only_basenames={
                 "folder":"text-directory",
                 "folder-documents":"text-directory-documents",
-            })
+            }, convert_from_svg=convert_from_svg)
+
+    if list_format=="plist":
+        plist_filename = os.path.join(destination, "FileTypeIcons.plist")
+        plistlib.writePlist(plist, plist_filename)
+    elif list_format=="json":
+        json_filename = os.path.join(destination, "FileTypeIcons.json")
+        s = json.dumps(plist, indent=2, separators=(',', ': '))
+        f = open(json_filename, "w")
+        f.write(s+"\n")
+        f.close()
+    else:
+        raise NonImplementedError
 
 
-    plist_filename = os.path.join(destination, "FileTypeIcons.plist")
-    plistlib.writePlist(plist, plist_filename)
 
-
-    
 
 if __name__=="__main__":
-    parser = OptionParser()
+    import argparse
 
-    parser.add_option("-i", "--input-directory", dest="input", default="Faenza",
+    parser = argparse.ArgumentParser(description='Converts GNOME iconset to mimetypes + structured list.')
+
+    parser.add_argument("-i", "--input-directory", nargs='?', type=str, dest="input", default="Faenza",
                   help="path to GNOME theme", metavar="INPUT_DIRECTORY")
-    parser.add_option("-o", "--output-directory", dest="output", default=os.path.join("..", "Resources"),
+    parser.add_argument("-o", "--output-directory", nargs='?', type=str, dest="output", default=os.path.join("..", "Resources"),
                       help="path to output Resources directory")
+    parser.add_argument("-f", "--format", nargs='?', type=str, dest="format", default="plist",
+                      help="output format, default is plist")
+    parser.add_argument("-s", "--sizes", dest="sizes", default=[], type=str, nargs='+',
+                      help="sizes to produce, default is 40 and 80")
+    parser.add_argument("--no-convert", dest="no_convert", action='store_true',
+                      help="skip svg conversion step")
 
-    (options, args) = parser.parse_args()
-    generate_icons_from_gnome_theme(source=options.input, destination=options.output)
+
+    options = parser.parse_args()
+    if not options.sizes:
+        options.sizes = (40, 80)
+    generate_icons_from_gnome_theme(source=options.input, destination=options.output, list_format=options.format, sizes=options.sizes, convert_from_svg=not options.no_convert)
